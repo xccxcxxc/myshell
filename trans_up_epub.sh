@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+#set -euo pipefail
 
 # 进入脚本所在目录，确保相对路径正确
 cd "$(dirname "$0")"
@@ -35,7 +35,7 @@ for file in *.epub; do
   echo "[$(date '+%F %T')] 正在处理: $file" >> trans_up.log
 
 
-  把上面的调用注释掉，改用下面这段（注意这样 key 会短暂出现在进程列表中）：
+ # 把上面的调用注释掉，改用下面这段（注意这样 key 会短暂出现在进程列表中）：
   python3 make_book.py \
   --book_name "$file" \
   --openai_key "$OPENAI_API_KEY" \
