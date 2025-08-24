@@ -27,6 +27,8 @@ fi
 
 # 清空旧日志，创建新日志文件
 : > trans_up.log
+: > nohup.out
+
 
 # 遍历当前目录下所有 .epub 文件
 for file in *.epub; do
@@ -42,8 +44,7 @@ for file in *.epub; do
   --model "$MODEL" \
   --language "$LANGUAGE" \
   --use_context \
-  --context_paragraph_limit 6 \
-  --batch >> trans_up.log 2>&1
+  --context_paragraph_limit 6  >> trans_up.log 2>&1
 
   echo "[$(date '+%F %T')] 完成: $file" >> trans_up.log
   echo >> trans_up.log
