@@ -1,11 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 清空历史上传日志
+: > up_wav.log
 
 
-# 遍历当前目录下所有 .wav 文件
-for file in *.wav; do
-  # 如果没有匹配文件，则跳过
-  [ -e "$file" ] || continue
-
-  echo "正在处理: $file" > r.log
-  nohup rclone copy "$file" E5OneDrive:/to_vps/ >> r.log 2>&1 &
-done
+# 只上传当前目录及其子目录中的 .wav 文件
+rclone copy . E5OneDrive:/vps_to \
+  --include '*.wav' \
+  --max-depth 1 \
+  --cache-chunk-size 500M >> up_wav.log
