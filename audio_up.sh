@@ -27,6 +27,7 @@ for file in *.epub; do
   echo >> audio_up.log
 done
 
-# 后续上传步骤
-/home/zg/audiblez/up_wav.sh
+# 转换及上传
+./convert_m4b.sh
+./up_m4b.sh
 
