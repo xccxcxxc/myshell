@@ -12,7 +12,7 @@ for file in *.epub; do
 
     echo "正在处理: $file"
 
-    output_dir="${file%.epub}"        # 去掉扩展名
+    output_dir="output_audio/${file%.epub}"        # 去掉扩展名
     printf 'y\n' | python3 main.py "$file" "$output_dir" \
         --tts edge \
         --language zh-CN \
