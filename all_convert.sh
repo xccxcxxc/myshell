@@ -5,3 +5,4 @@ set -euo pipefail
 ./convert_audio.sh > convert_audio.log 2>&1
 ./up_audio.sh > up_audio.log 2>&1
 sudo mv output_audio/* /home/zg/docker/shelf/audiobooks/
+./clean_all.sh
