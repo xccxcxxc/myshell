@@ -40,19 +40,17 @@ need_rclone(){
   command -v rclone >/dev/null 2>&1 || die "未检测到 rclone，请先安装：sudo apt install -y rclone"
 }
 
-# 稳健挂载判断：mountpoint + /proc/mounts（fuse*），尽量匹配 SOURCE 中的远程名
+# 稳健挂载判断：mountpoint + /proc/mounts（fuse*）
 is_mounted(){
-  local remote="${REMOTE_NAME%:}:"
   mountpoint -q -- "${MOUNT_DIR}" || return 1
-  local line fstype src
-  line="$(awk -v m="${MOUNT_DIR}" '$2==m{print $0}' /proc/mounts | tail -n1)"
-  [[ -n "$line" ]] || return 1
+  local fstype src remote
   fstype="$(awk -v m="${MOUNT_DIR}" '$2==m{print $3}' /proc/mounts | tail -n1)"
   src="$(awk -v m="${MOUNT_DIR}" '$2==m{print $1}' /proc/mounts | tail -n1)"
   [[ "$fstype" == fuse* ]] || return 1
-  # 远程名已知时尽量要求 SOURCE 包含远程名；否则放宽
+  # 已知远程名时，要求 SOURCE 包含该远程，避免误判为别的 fuse 挂载
   if [[ -n "${REMOTE_NAME:-}" ]]; then
-    [[ "$src" == *"${remote}"* ]] || true
+    remote="${REMOTE_NAME%:}:"
+    [[ "$src" == *"${remote}"* ]] || return 1
   fi
   return 0
 }
@@ -109,6 +107,16 @@ write_service(){
   FUSER_BIN="$(command -v fusermount3 || command -v fusermount || echo /bin/fusermount3)"
   local RCLONE_BIN="$(command -v rclone)"
   local REMOTE_REF="${REMOTE_NAME%:}:"
+  # rclone mount 参数说明：
+  # --vfs-cache-mode writes      开启写缓存，增强应用兼容性
+  # --vfs-cache-max-age 336h     缓存最长保留 14 天
+  # --vfs-cache-max-size 10G     缓存总量上限 10G
+  # --cache-dir                  指定缓存目录
+  # --dir-cache-time 72h         目录缓存 72 小时
+  # --poll-interval 15s          每 15 秒轮询远端变更
+  # --umask 022                  挂载默认权限掩码
+  # --allow-other                允许其他本机用户访问挂载点
+  # --log-level/--log-file       输出日志到文件，便于排障
   msg "=== 写入/更新 systemd 服务文件（User=${USER_NAME}） ==="
   run_sudo tee "${SERVICE_FILE}" >/dev/null <<EOF
 [Unit]
@@ -145,7 +153,7 @@ EOF
   run_sudo systemctl enable "${SERVICE_NAME}" >/dev/null
 }
 
-retry_wait_mount(){
+wait_for_mount(){
   for _ in {1..10}; do
     if is_mounted; then return 0; fi
     sleep 0.5
@@ -169,7 +177,7 @@ cmd_install(){
   else
     msg "=== 未挂载，启动服务 ==="
     run_sudo systemctl restart "${SERVICE_NAME}" || run_sudo systemctl start "${SERVICE_NAME}"
-    if retry_wait_mount; then
+    if wait_for_mount; then
       msg "✅ OneDrive 已成功挂载到 ${MOUNT_DIR}"
     else
       msg "⚠️ 仍未挂载成功。下面显示服务状态与日志末尾："
@@ -194,17 +202,28 @@ cmd_status(){
   run_sudo systemctl --no-pager --full status "${SERVICE_NAME}" || true
 }
 
+# 启动 systemd 挂载服务
 cmd_start(){ run_sudo systemctl start "${SERVICE_NAME}"; }
+# 停止 systemd 挂载服务
 cmd_stop(){ run_sudo systemctl stop "${SERVICE_NAME}" || true; }
+# 重启服务（若未启动则尝试直接启动）
 cmd_restart(){ run_sudo systemctl restart "${SERVICE_NAME}" || run_sudo systemctl start "${SERVICE_NAME}"; }
+# 查看最近 100 行日志
 cmd_logs(){ run_sudo tail -n 100 "${LOG_FILE}" || echo "暂无日志：${LOG_FILE}"; }
+
+unmount_mount_dir(){
+  local fb
+  fb="$(command -v fusermount3 || command -v fusermount || true)"
+  if [ -n "$fb" ]; then
+    as_user "$fb" -u "${MOUNT_DIR}" || true
+  fi
+  is_mounted && run_sudo umount -l "${MOUNT_DIR}" || true
+}
 
 cmd_unmount(){
   detect_remote || true
   if is_mounted; then
-    local fb="$(command -v fusermount3 || command -v fusermount || echo)"
-    if [ -n "$fb" ]; then "$fb" -u "${MOUNT_DIR}" || true; fi
-    is_mounted && run_sudo umount -l "${MOUNT_DIR}" || true
+    unmount_mount_dir
     echo "已卸载（如服务仍启动，可执行：systemctl stop ${SERVICE_NAME}）"
   else
     echo "未挂载，无需卸载。"
@@ -260,11 +279,7 @@ H
 
   msg "=== 停止服务并卸载挂载 ==="
   run_sudo systemctl is-active --quiet "${SERVICE_NAME}" && run_sudo systemctl stop "${SERVICE_NAME}" || true
-  if mountpoint -q -- "${MOUNT_DIR}"; then
-    local fb="$(command -v fusermount3 || command -v fusermount || echo)"
-    [ -n "$fb" ] && "$fb" -u "${MOUNT_DIR}" || true
-    mountpoint -q -- "${MOUNT_DIR}" && run_sudo umount -l "${MOUNT_DIR}" || true
-  fi
+  is_mounted && unmount_mount_dir
 
   msg "=== 禁用并删除 systemd 服务 ==="
   if [ -f "${SERVICE_FILE}" ]; then
@@ -329,10 +344,40 @@ usage(){
 
 示例：
   $0 install
+    # 首次安装/修复 FUSE、写入服务并尝试挂载 OneDrive
+
   REMOTE_NAME=E5OneDrive $0 install
+    # 指定远程名进行挂载（当自动识别不到远程时使用）
+
   $0 status
+    # 查看当前挂载状态 + systemd 服务状态
+
+  $0 start
+    # 启动挂载服务
+
+  $0 stop
+    # 停止挂载服务
+
+  $0 restart
+    # 重启挂载服务
+
+  $0 logs
+    # 查看最近日志，快速定位报错
+
+  $0 unmount
+    # 仅卸载挂载点（不禁用服务）
+
+  $0 reconnect
+    # 重新执行 rclone 授权流程（账号失效时常用）
+
+  $0 doctor
+    # 自检环境（rclone / fuse / 远程配置 / 服务状态）
+
   $0 ls
+    # 列出 OneDrive 远程根目录
+
   $0 cleanup --purge-cache --purge-mount-dir --purge-fuse-softlink --purge-logs
+    # 清理服务与挂载，同时删除缓存/挂载目录/日志/fusermount3 兼容软链
 EOF
 }
 
@@ -356,4 +401,3 @@ main(){
 }
 
 main "$@"
-
